@@ -288,33 +288,64 @@ class Agent(nn.Module):
         #     nn.ReLU(),
         # )
 
+        nn.Sequential(
+            Transpose((0, 3, 1, 2)),
+            SharpenedCosineSimilarity(in_channels=c, out_channels=8, kernel_size=3, padding=1),
+            MaxAbsPool2d(3, stride=2, padding=1),
+            nn.ReLU(),
+            SharpenedCosineSimilarity(in_channels=8, out_channels=8, kernel_size=3, padding=1),
+            MaxAbsPool2d(3, stride=2, padding=1),
+            nn.Tanh(),
+        )
+
+
         self.encoder = nn.Sequential(
             Transpose((0, 3, 1, 2)),
-            SharpenedCosineSimilarity(in_channels=c, out_channels=32, kernel_size=3, padding=1),
-            MaxAbsPool2d(3, stride=2, padding=1),
+            nn.Conv2d(c, 32, kernel_size=8, stride=4, padding=0),
             nn.ReLU(),
-            SharpenedCosineSimilarity(in_channels=32, out_channels=64, kernel_size=3, padding=1),
-            MaxAbsPool2d(3, stride=2, padding=1),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=0),
             nn.ReLU(),
+            #nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),
+            #nn.ReLU(),
+            nn.Flatten(),
+        )
+
+        nn.Sequential(
+            layer_init(nn.ConvTranspose2d(8, 16, 3, stride=2, padding=1, output_padding=1)),
+            nn.ReLU(),
+            layer_init(nn.ConvTranspose2d(16, 32, 3, stride=2, padding=1, output_padding=1)),
+            nn.ReLU(),
+            Transpose((0, 2, 3, 1)),
+            layer_init(nn.Linear(32, 64)),
+            nn.ReLU(),
+            layer_init(nn.Linear(64, 78)),
         )
 
         self.actor = nn.Sequential(
-            layer_init(nn.ConvTranspose2d(64, 32, 3, stride=2, padding=1, output_padding=1)),
+            layer_init(nn.Linear(64+27, 64)),
             nn.ReLU(),
-            layer_init(nn.ConvTranspose2d(32, 78, 3, stride=2, padding=1, output_padding=1)),
-            Transpose((0, 2, 3, 1)),
+            layer_init(nn.Linear(64, 78))
         )
         self.critic = nn.Sequential(
-            nn.Flatten(),
-            layer_init(nn.Linear(64 * 4 * 4, 128)),
+            layer_init(nn.Linear(64, 32)),
             nn.ReLU(),
-            layer_init(nn.Linear(128, 1), std=1),
+            layer_init(nn.Linear(32, 1), std=1),
         )
         self.register_buffer("mask_value", torch.tensor(-1e8))
 
+    def forward(self, x, hidden):
+        B = x.size(0)
+        x = x.reshape((B, 256, -1))
+        hidden = hidden.unsqueeze(1).repeat((1,256,1))
+        residual = torch.cat([x, hidden], dim=-1)
+        logits = self.actor(residual)
+        logits = logits.reshape((B,16,16,-1))
+        return logits
+
     def get_action_and_value(self, x, action=None, invalid_action_masks=None, envs=None, device=None):
         hidden = self.encoder(x)
-        logits = self.actor(hidden)
+        #logits = self.actor(hidden)
+        logits = self(x, hidden)
         grid_logits = logits.reshape(-1, envs.action_plane_space.nvec.sum())
         split_logits = torch.split(grid_logits, envs.action_plane_space.nvec.tolist(), dim=1)
 
